@@ -8,7 +8,11 @@ import articles from "./articles";
  *
  * const { data } = api.articles.getAll();
  * const { data, isLoading, error } = api.articles.getById(1);
- * const { mutate, data } = api.articles.update({ name: "foo" });
+ * const { mutate, data } = api.articles.update({ name: "foo" }, {
+ *  onSuccess: (data) => {
+ *    api.articles.getAll.invalidate();
+ *  }
+ * });
  *
  * api.articles.getall.invalidate();
  * api.articles.invalidate();
