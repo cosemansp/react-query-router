@@ -1,12 +1,10 @@
-/* eslint-disable no-underscore-dangle */
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import {
+  type UseMutationResult,
+  type UseQueryOptions,
+  type UseQueryResult,
   useMutation,
-  UseMutationResult,
   useQuery,
   useQueryClient,
-  UseQueryOptions,
-  UseQueryResult,
 } from "@tanstack/react-query";
 
 type BaseFn = (...args: any[]) => unknown;
