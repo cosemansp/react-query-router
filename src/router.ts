@@ -1,6 +1,13 @@
 /* eslint-disable no-underscore-dangle */
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useMutation, UseMutationResult, useQuery, UseQueryOptions, UseQueryResult } from "@tanstack/react-query";
+import {
+  useMutation,
+  UseMutationResult,
+  useQuery,
+  useQueryClient,
+  UseQueryOptions,
+  UseQueryResult,
+} from "@tanstack/react-query";
 
 type BaseFn = (...args: any[]) => unknown;
 type FirstParameter<TFn extends BaseFn> = Parameters<TFn>[0] extends undefined ? void : Parameters<TFn>[0];
@@ -9,7 +16,7 @@ type Procedure<TFn = BaseFn> = {
   /**
    * @deprecated - internal use only
    */
-  _def: TFn;
+  _queryFn: TFn;
 };
 
 type QueryProcedure<
@@ -23,15 +30,7 @@ type QueryProcedure<
     options?: Omit<UseQueryOptions<TData, TError, TData>, "queryKey" | "queryFn">,
   ) => UseQueryResult<TData, TError>;
   invalidate: (input: TParams) => void;
-  getQueryKey: (input: TParams) => any[];
-  /**
-   * @deprecated - internal use only
-   */
-  _key?: string;
-  /**
-   * @deprecated - internal use only
-   */
-  _parent?: any;
+  getQueryKeys: (input: TParams) => any[];
 };
 
 type MutationProcedure<
@@ -69,26 +68,29 @@ export const procedure = {
   query<TFn extends BaseFn>(fn: TFn): MakeQueryProcedure<TFn> {
     return {
       useQuery(input: FirstParameter<TFn>, options: any) {
-        const keys = this.getQueryKey(input);
+        const keys = this.getQueryKeys(input);
         return useQuery(keys, () => fn(input), options);
       },
       invalidate(input: unknown) {
-        const keys = this.getQueryKey(input);
-        console.log("invalidate query", keys);
+        const queryClient = useQueryClient();
+        if (queryClient) {
+          const keys = this.getQueryKeys(input);
+          queryClient.invalidateQueries(keys);
+        }
       },
-      getQueryKey(input: unknown) {
+      getQueryKeys(input: unknown) {
         return [input];
       },
-      _def: fn,
+      _queryFn: fn,
     } as any;
   },
   mutation<TFn extends BaseFn>(fn: TFn): MakeMutationProcedure<TFn> {
     return {
       useMutation(options: any) {
-        const rawFn = fn as any;
-        return useMutation((variables) => rawFn(variables), options);
+        const mutationFn = fn as any;
+        return useMutation((variables) => mutationFn(variables), options);
       },
-      _def: fn,
+      _queryFn: fn,
     } as any;
   },
 };
@@ -97,71 +99,61 @@ type Config<T> = {
   [K in keyof T]: T[K];
 };
 
-type Router = {
-  getQueryKey: () => any[];
-  invalidate: () => void;
-  createCaller: () => any;
-  _parent?: any;
-};
-
-type RouteCallers<T> = {
-  [K in keyof T]: T[K] extends Procedure<any> ? T[K]["_def"] : RouteCallers<T[K]>;
-};
-
-export const createRouter = <T>(
-  config: Config<T>,
-): T & {
+type Router<T> = Config<T> & {
   createCaller(): RouteCallers<T>;
   getQueryKeys(): any[];
   invalidate(): void;
-} => {
-  const keys = Object.keys(config);
+};
+
+type RouteCallers<T> = {
+  [K in keyof T]: T[K] extends Procedure<any> ? T[K]["_queryFn"] : RouteCallers<T[K]>;
+};
+
+export const createRouter = <T>(config: Config<T>): Router<T> => {
+  const router = config as Router<T>;
+  const keys = Object.keys(router);
   keys.forEach((key) => {
-    const proc = config[key as keyof T] as Router | QueryProcedure | MutationProcedure;
-    if ("useQuery" in proc) {
+    const procOrRouter = router[key as keyof T] as Router<any> | QueryProcedure | MutationProcedure;
+    if ("useQuery" in procOrRouter) {
       // query procedure
-      proc.getQueryKey = function getQueryKey(input: unknown) {
-        console.log(">>>", proc);
-        if (proc._parent && proc._parent.getQueryKey) {
-          const parentKey = proc._parent.getQueryKey();
-          return [...parentKey, key, input];
+      procOrRouter.getQueryKeys = function getQueryKeys(input: unknown) {
+        if (router.getQueryKeys) {
+          const parentKey = router.getQueryKeys();
+          return [...parentKey, key, input].filter(Boolean);
         }
-        return [key, input];
+        return [key, input].filter(Boolean);
       };
-      proc._parent = config;
-    } else if ("useMutation" in proc) {
+    } else if ("useMutation" in procOrRouter) {
       // mutation procedure
-    } else if (typeof proc === "object" && proc !== null) {
+    } else if (typeof procOrRouter === "object" && procOrRouter !== null) {
       // router
-      const router = proc;
-      router.getQueryKey = function getQueryKey() {
-        // router of router
-        if (router._parent && router._parent.getQueryKey) {
-          const parentKey = router._parent.getQueryKey();
-          return [...parentKey, key];
-        }
+      procOrRouter.getQueryKeys = function getQueryKeys() {
         return [key];
       };
-      router._parent = config;
     }
   });
-  return {
-    ...config,
-    invalidate() {
-      const routerKeys = this.getQueryKey();
-      console.log("invalidate", routerKeys);
-    },
-    createCaller: function createCaller() {
-      const routerKeys = Object.keys(config);
-      return routerKeys.reduce((acc, routerKey) => {
-        const routerOrProcedure: any = config[routerKey as keyof typeof config];
-        if ("_def" in routerOrProcedure) {
-          acc[routerKey] = routerOrProcedure._def;
-        } else {
-          acc[routerKey] = routerOrProcedure.createCaller();
-        }
-        return acc;
-      }, {} as Record<string, any>) as T;
-    } as any,
-  } as any;
+  router.invalidate = function () {
+    const queryClient = useQueryClient();
+    if (queryClient) {
+      const keys = this.getQueryKeys();
+      queryClient.invalidateQueries(keys);
+    }
+  };
+  router.createCaller = function () {
+    const routerKeys = Object.keys(config);
+    return routerKeys.reduce((acc, routerKey) => {
+      const routerOrProcedure: any = config[routerKey as keyof typeof config];
+      if ("_queryFn" in routerOrProcedure) {
+        // procedure
+        acc[routerKey] = routerOrProcedure._queryFn;
+      } else if (typeof routerOrProcedure === "object" && routerOrProcedure !== null) {
+        // router
+        acc[routerKey] = routerOrProcedure.createCaller();
+      } else {
+        // helper function
+      }
+      return acc;
+    }, {} as Record<string, any>) as T;
+  };
+  return router;
 };
