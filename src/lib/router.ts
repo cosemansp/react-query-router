@@ -6,6 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { FetchError } from "ofetch";
 
 type BaseFn = (...args: any[]) => unknown;
 type FirstParameter<TFn extends BaseFn> = Parameters<TFn>[0] extends undefined ? void : Parameters<TFn>[0];
@@ -20,10 +21,9 @@ type Procedure<TFn = BaseFn> = {
 type QueryProcedure<
   TParams extends Record<string, unknown> | void = void,
   TData = unknown,
-  TError = Error,
   TFn = BaseFn,
 > = Procedure<TFn> & {
-  useQuery: (
+  useQuery: <TError = Error>(
     input: TParams,
     options?: Omit<UseQueryOptions<TData, TError, TData>, "queryKey" | "queryFn">,
   ) => UseQueryResult<TData, TError>;
@@ -34,10 +34,9 @@ type QueryProcedure<
 type MutationProcedure<
   TParams extends Record<string, unknown> | void = void,
   TData = unknown,
-  TError = Error,
   TFn = BaseFn,
 > = Procedure<TFn> & {
-  useMutation: (
+  useMutation: <TError = Error>(
     options?: Omit<UseQueryOptions<TData, TError, TData>, "queryKey" | "queryFn">,
   ) => UseMutationResult<TData, unknown, TParams, unknown>;
 };
@@ -47,7 +46,7 @@ type MakeProcedure<
   TParams extends Record<string, unknown> | void = void,
   TData = unknown,
   TFn extends BaseFn = BaseFn,
-> = TType extends "query" ? QueryProcedure<TParams, TData, Error, TFn> : MutationProcedure<TParams, TData, Error, TFn>;
+> = TType extends "query" ? QueryProcedure<TParams, TData, TFn> : MutationProcedure<TParams, TData, TFn>;
 
 type MakeQueryProcedure<TFn extends BaseFn> = MakeProcedure<
   "query",
@@ -64,13 +63,13 @@ type MakeMutationProcedure<TFn extends BaseFn> = MakeProcedure<
 
 export const procedure = {
   query<TFn extends BaseFn>(fn: TFn): MakeQueryProcedure<TFn> {
+    const queryClient = useQueryClient();
     return {
       useQuery(input: FirstParameter<TFn>, options: any) {
         const keys = this.getQueryKeys(input);
         return useQuery(keys, () => fn(input), options);
       },
       invalidate(input: unknown) {
-        const queryClient = useQueryClient();
         if (queryClient) {
           const keys = this.getQueryKeys(input);
           queryClient.invalidateQueries(keys);
